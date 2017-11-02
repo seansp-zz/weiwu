@@ -1,0 +1,12 @@
+---
+platform: linux
+image_resource:
+  type: docker-image
+  source: {repository: seansp/weiwu}
+outputs: [name: working-folder]
+run:
+  path: sh
+  args:
+  - -exc
+  - |
+    echo "Hello World"
