@@ -1,0 +1,19 @@
+#!/usr/bin/expect
+set timeout 2000
+set ip [lindex $argv 0]
+set user [lindex $argv 1]
+set password [lindex $argv 2]
+
+spawn ssh "$user\@$ip"
+expect "Are you sure you want to continue connecting (yes/no)?"
+send "yes\r";
+expect "$user@$ip's password:"
+send "$password\r";
+send_user "Woohoo. Logged in. $password"
+expect "mstest@Canonical:~$"
+send "git clone http://github.com/seansp/lis-pipeline.git\r";
+expect "mstest@Canonical:~$"
+send "chmod +x ~/lis-pipeline/scripts/make_drone.sh\r";
+expect "mstest@Canonical:~$"
+send "sudo ~/lis-pipeline/scripts/make_drone.sh\r";
+expect "mstest@Canonical:~$"
