@@ -1,5 +1,4 @@
 #!/usr/bin/expect
-set timeout 2000
 set ip [lindex $argv 0]
 set user [lindex $argv 1]
 set password [lindex $argv 2]
@@ -16,4 +15,5 @@ expect "mstest@Canonical:~$"
 send "chmod +x ~/lis-pipeline/scripts/make_drone.sh\r";
 expect "mstest@Canonical:~$"
 send "sudo ~/lis-pipeline/scripts/make_drone.sh\r";
+set timeout 2000
 expect "mstest@Canonical:~$"
