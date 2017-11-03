@@ -17,3 +17,4 @@ expect "mstest@Canonical:~$"
 send "sudo ~/lis-pipeline/scripts/make_drone.sh\r";
 set timeout 2000
 expect "mstest@Canonical:~$"
+send "exit\r";
