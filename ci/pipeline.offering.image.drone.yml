@@ -1,0 +1,179 @@
+resource_types:
+  - name: az-build-finder
+    type: docker-image
+    source:
+      repository: seansp/redis-resource
+
+resources:
+- name: pipeline-source
+  type: git
+  source:
+    uri: https://github.com/seansp/weiwu.git
+
+jobs:
+  - name: Get-Latest-Offering
+    plan:
+    - get: pipeline-source
+    - task: get-urn-for-provider-sku
+      config:
+        platform: linux
+        image_resource:
+          type: docker-image
+          source: {repository: seansp/weiwu}
+        outputs: [name: retrieved-urn ]
+        params: { 
+            azureApplication: "((azureApplication))",
+            azureTenant: "((azureTenant))",
+            azurePassword: "((azurePassword))",
+            VENDOR: "Canonical",
+            SKU: "16.04-DAILY-LTS",
+            LOCATION: "westus"
+        }
+        run:
+          path: sh
+          args: 
+          - -exc
+          - |
+            az login -u $azureApplication --service-principal --tenant $azureTenant --password $azurePassword
+            az vm image list --location $LOCATION --all --publisher $VENDOR --sku $SKU -o tsv > retrieved-urn/complete-list.txt
+            cat retrieved-urn/complete-list.txt
+            tail -n 1 retrieved-urn/complete-list.txt > retrieved-urn/last-item-in-list.txt
+            cat retrieved-urn/last-item-in-list.txt
+            echo $(cut -f 1 retrieved-urn/last-item-in-list.txt) > retrieved-urn/FLAVOR
+            echo $(cut -f 2 retrieved-urn/last-item-in-list.txt) > retrieved-urn/VENDOR
+            echo $(cut -f 3 retrieved-urn/last-item-in-list.txt) > retrieved-urn/SKU
+            echo $(cut -f 5 retrieved-urn/last-item-in-list.txt) > retrieved-urn/VERSION
+            echo $(cut -f 4 retrieved-urn/last-item-in-list.txt) > retrieved-urn/URN
+            redis-cli -h redis set FLAVOR $(cat retrieved-urn/FLAVOR)
+            redis-cli -h redis set VENDOR $(cat retrieved-urn/VENDOR)
+            redis-cli -h redis set SKU $(cat retrieved-urn/SKU)
+            redis-cli -h redis set URN $(cat retrieved-urn/URN)
+            redis-cli -h redis set VERSION $(cat retrieved-urn/VERSION)
+            redis-cli -h redis set LOCATION $LOCATION
+
+
+  - name: Make-Drone-From-New-Machine
+    plan:
+    - get: pipeline-source
+      passed: [Get-Latest-Offering, Create-Machine-From-URN]
+    - task: fake-resource
+      config:
+        platform: linux
+        image_resource: 
+          type: docker-image
+          source: {repository: seansp/weiwu}
+        outputs: [name: ip-address]
+        run:
+          path: bash
+          args:
+          - -exc
+          - |
+            echo "Reading my IP address."
+            echo "$(redis-cli -h redis get IP_ADDRESS)" > ip-address/IP_ADDRESS
+    - task: make-drone
+      config:
+        platform: linux
+        image_resource:
+          type: docker-image
+          source: {repository: seansp/weiwu}
+        inputs: [name: ip-address]
+        params: {
+          ADMINUSER: "((adminUser))",
+          ADMINPASS: "((adminPass))"
+        }
+        run:
+          path: bash
+          args:
+          - -exc
+          - |
+            IP_ADDRESS=$(cat ip-address/IP_ADDRESS)
+            git clone http://github.com/seansp/weiwu.git
+            ./weiwu/ci/scripts/ssh_make_drone.exp $IP_ADDRESS $ADMINUSER $ADMINPASS
+
+
+  - name: Create-Machine-From-URN
+    plan:
+    - get: pipeline-source
+      passed: [Get-Latest-Offering]
+    - task: get-latest-urn-from-redis
+      config:
+        platform: linux
+        image_resource: 
+          type: docker-image
+          source: {repository: seansp/weiwu}
+        outputs: [name: retrieved-urn]
+        run:
+          path: bash
+          args:
+          - -exc
+          - |
+            echo "Temporary stop-gap for moving without a resource."
+            echo "$(redis-cli -h redis get FLAVOR)">retrieved-urn/FLAVOR
+            echo "$(redis-cli -h redis get VENDOR)">retrieved-urn/VENDOR
+            echo "$(redis-cli -h redis get SKU)">retrieved-urn/SKU
+            echo "$(redis-cli -h redis get VERSION)">retrieved-urn/VERSION
+            echo "$(redis-cli -h redis get URN)">retrieved-urn/URN
+            echo "$(redis-cli -h redis get LOCATION)">retrieved-urn/LOCATION
+            echo "Fabrications complete."
+            ls -l retrieved-urn
+    - task: build-the-machine-definition
+      config:
+        platform: linux
+        image_resource:
+          type: docker-image
+          source: {repository: ubuntu}
+        inputs: [name: retrieved-urn]
+        outputs: [name: create-machine-parameters]
+        run:
+          path: bash
+          args:
+          - -exc
+          - |
+            VENDOR=$(cat retrieved-urn/VENDOR)
+            SKU=$(cat retrieved-urn/SKU)
+            VERSION=$(cat retrieved-urn/VERSION)
+            echo "Building artifacts"
+            cp retrieved-urn/LOCATION create-machine-parameters/LOCATION
+            cp retrieved-urn/URN create-machine-parameters/URN
+            echo "$VENDOR.$SKU.$VERSION" > create-machine-parameters/MACHINENAME
+            ls -l create-machine-parameters
+            cat create-machine-parameters/MACHINENAME
+
+    - task: create-the-vm
+      config:
+        platform: linux
+        image_resource:
+          type: docker-image
+          source: {repository: seansp/weiwu}
+        inputs: [name: create-machine-parameters ]
+        outputs: [name: machine-details ]
+        params: {
+            GROUPNAME: "seansp-concourse",
+            azureApplication: "((azureApplication))",
+            azureTenant: "((azureTenant))",
+            azurePassword: "((azurePassword))",
+            ADMINUSER: "((adminUser))",
+            ADMINPASS: "((adminPass))"
+        }
+        run:
+          path: sh
+          args:
+          - -exc
+          - |
+            echo "Loading details from the files I consume."
+            URN=$(cat create-machine-parameters/URN)
+            LOCATION=$(cat create-machine-parameters/LOCATION)
+            MACHINENAME=$(cat create-machine-parameters/MACHINENAME)
+            echo "Building GROUP $GROUPNAME"
+            az login -u $azureApplication --service-principal --tenant $azureTenant --password $azurePassword
+            az group create -n $GROUPNAME -l $LOCATION
+            az vm create -g $GROUPNAME -n $MACHINENAME --image $URN --admin-user $ADMINUSER --admin-password $ADMINPASS 
+            # Get public IP address for the VM
+            IP_ADDRESS=$(az vm list-ip-addresses -g $GROUPNAME -n $MACHINENAME --query '[0].virtualMachine.network.publicIpAddresses[0].ipAddress' -o tsv)
+            echo $IP_ADDRESS > machine-details/IP
+            echo $MACHINENAME > machine-details/MACHINENAME
+            echo $LOCATION > machine-details/LOCATION
+            cat machine-details/LOCATION
+            redis-cli -h redis set IP_ADDRESS $IP_ADDRESS
+    
+
